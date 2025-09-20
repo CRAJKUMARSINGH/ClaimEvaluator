@@ -85,7 +85,12 @@ var init_schema = __esm({
       extendedDuration: integer("extended_duration").notNull(),
       completionPercentage: real("completion_percentage").notNull(),
       calculationResults: jsonb("calculation_results").$type().notNull(),
-      createdAt: timestamp("created_at").defaultNow()
+      createdAt: timestamp("created_at").defaultNow(),
+      // Add sector-specific fields
+      projectType: text("project_type"), // highway, bridge, metro, power, airport, etc.
+      sectorSpecificEnhancements: jsonb("sector_specific_enhancements").$type(), // sector-specific claim enhancements
+      confidenceScore: real("confidence_score"), // confidence score for calculations
+      enhancementPercentage: real("enhancement_percentage") // percentage of enhancement applied
     });
     insertDocumentSchema = createInsertSchema(documents).omit({
       id: true,
@@ -401,14 +406,20 @@ var DocumentParser = class {
     const summary = sentences.slice(0, 3).join(". ");
     return summary;
   }
+  
+  // Enhanced content processing with sector-specific handling
   processTextContent(fileName, rawContent) {
     let processedContent = `TEXT DOCUMENT ANALYSIS - ${fileName}
 
 `;
     const lines = rawContent.split("\n");
-    const keyPhrases = ["claim", "amount", "cost", "delay", "prolongation", "additional", "variation", "rs", "\u20B9", "crore", "lakh", "fidic", "nhai", "contract", "dispute", "arbitration", "loss of productivity", "extension of time", "escalation", "BOQ", "Bill of Quantities"];
+    const keyPhrases = ["claim", "amount", "cost", "delay", "prolongation", "additional", "variation", "rs", "\u20B9", "crore", "lakh", "fidic", "nhai", "contract", "dispute", "arbitration", "loss of productivity", "extension of time", "escalation", "BOQ", "Bill of Quantities", "highway", "bridge", "metro", "rail", "airport", "terminal", "power", "plant", "tunnel", "water", "treatment", "port", "smart", "city"];
+    
     let relevantLines = [];
     const claimAmountRegex = /claim\s*amount:\s*[rs₹]?\s*([\d,\.]+)/i;
+    const croreRegex = /([\d,\.]+)\s*(crore|cr)/gi;
+    const lakhRegex = /([\d,\.]+)\s*(lakh|lakhs)/gi;
+    
     lines.forEach((line) => {
       const lowerLine = line.toLowerCase();
       if (keyPhrases.some((phrase) => lowerLine.includes(phrase))) {
@@ -419,11 +430,25 @@ var DocumentParser = class {
         const amount = claimAmountMatch[1];
         relevantLines.push(`  - Claim Amount: ${amount}`);
       }
+      
+      // Extract crore values
+      let croreMatch;
+      while ((croreMatch = croreRegex.exec(line)) !== null) {
+        relevantLines.push(`  - Crore Value: ${croreMatch[1]} ${croreMatch[2]}`);
+      }
+      
+      // Extract lakh values
+      let lakhMatch;
+      while ((lakhMatch = lakhRegex.exec(line)) !== null) {
+        relevantLines.push(`  - Lakh Value: ${lakhMatch[1]} ${lakhMatch[2]}`);
+      }
     });
+    
     if (relevantLines.length > 0) {
       processedContent += "KEY EXTRACTED CONTENT:\n";
-      processedContent += relevantLines.slice(0, 20).join("\n") + "\n\n";
+      processedContent += relevantLines.slice(0, 30).join("\n") + "\n\n";
     }
+    
     const summary = this.summarizeContent(rawContent);
     processedContent += "\nDOCUMENT SUMMARY:\n";
     processedContent += summary + "\n\n";
@@ -434,13 +459,56 @@ var DocumentParser = class {
     processedContent += `Relevant lines found: ${relevantLines.length}
 
 `;
+    
+    // Sector identification
+    const lowerFileName = fileName.toLowerCase();
+    const lowerContent = rawContent.toLowerCase();
+    
+    let projectType = "general";
+    if (lowerFileName.includes("highway") || lowerFileName.includes("road") || 
+        lowerContent.includes("nhai") || lowerContent.includes("national highway")) {
+      projectType = "highway";
+      processedContent += "PROJECT TYPE: Highway Construction\n";
+    } else if (lowerFileName.includes("bridge") || lowerContent.includes("bridge")) {
+      projectType = "bridge";
+      processedContent += "PROJECT TYPE: Bridge Construction\n";
+    } else if (lowerFileName.includes("metro") || lowerFileName.includes("rail") || 
+               lowerContent.includes("underground") || lowerContent.includes("railway")) {
+      projectType = "metro";
+      processedContent += "PROJECT TYPE: Metro/Rail Construction\n";
+    } else if (lowerFileName.includes("power") || lowerFileName.includes("plant") || 
+               lowerContent.includes("thermal") || lowerContent.includes("electric")) {
+      projectType = "power";
+      processedContent += "PROJECT TYPE: Power Plant Construction\n";
+    } else if (lowerFileName.includes("airport") || lowerFileName.includes("terminal") || 
+               lowerContent.includes("aviation")) {
+      projectType = "airport";
+      processedContent += "PROJECT TYPE: Airport Terminal Construction\n";
+    } else if (lowerFileName.includes("tunnel") || lowerContent.includes("tunnel")) {
+      projectType = "tunnel";
+      processedContent += "PROJECT TYPE: Tunnel Construction\n";
+    } else if (lowerFileName.includes("water") || lowerFileName.includes("treatment") || 
+               lowerContent.includes("water treatment")) {
+      projectType = "water";
+      processedContent += "PROJECT TYPE: Water Treatment Plant\n";
+    } else if (lowerFileName.includes("port") || lowerContent.includes("port")) {
+      projectType = "port";
+      processedContent += "PROJECT TYPE: Port Construction\n";
+    } else if (lowerFileName.includes("smart") || lowerFileName.includes("city") || 
+               lowerContent.includes("smart city")) {
+      projectType = "smartcity";
+      processedContent += "PROJECT TYPE: Smart City Infrastructure\n";
+    }
+    
     if (rawContent.length < 5e3) {
       processedContent += "FULL CONTENT:\n" + rawContent;
     } else {
       processedContent += "CONTENT PREVIEW (first 2000 chars):\n" + rawContent.substring(0, 2e3) + "\n[...content truncated...]";
     }
+    
     return processedContent;
   }
+  
   async parseDocument(filePath, mimetype) {
     try {
       const fileName = path.basename(filePath);
@@ -465,6 +533,21 @@ var DocumentParser = class {
         content = `DOCUMENT ANALYSIS - ${fileName}
 
 `;
+        let projectType = "general";
+        
+        // Determine project type from filename
+        if (fileName.toLowerCase().includes("highway") || fileName.toLowerCase().includes("road")) {
+          projectType = "highway";
+        } else if (fileName.toLowerCase().includes("bridge")) {
+          projectType = "bridge";
+        } else if (fileName.toLowerCase().includes("metro") || fileName.toLowerCase().includes("rail")) {
+          projectType = "metro";
+        } else if (fileName.toLowerCase().includes("power") || fileName.toLowerCase().includes("plant")) {
+          projectType = "power";
+        } else if (fileName.toLowerCase().includes("airport") || fileName.toLowerCase().includes("terminal")) {
+          projectType = "airport";
+        }
+        
         if (mimetype.includes("word") || fileExtension === ".doc" || fileExtension === ".docx") {
           content += `WORD DOCUMENT: ${fileName}
 `;
@@ -529,6 +612,8 @@ File type: ${mimetype}
 `;
         content += `File size: ${fileSize} bytes
 `;
+        content += `Project type: ${projectType}
+`;
         content += `Analysis date: ${(/* @__PURE__ */ new Date()).toISOString()}
 `;
         content += `
@@ -581,6 +666,25 @@ var AI_CONFIG = {
 var AIAnalysisService = class {
   progressCallback;
   aiClients = [];
+  // Add financial calculation methodologies
+  financialMethodologies = {
+    fidicTraditional: {
+      name: "FIDIC Traditional Methodology",
+      description: "Time-related cost calculations, Disruption and loss of productivity analysis, Head office overhead calculations, Financing cost computations, Risk and profit adjustments",
+      calculate: this.calculateFIDICTraditional.bind(this)
+    },
+    fidicGreenBook: {
+      name: "FIDIC Green Book Methodology",
+      description: "Sustainable construction adjustments, Environmental compliance costs, Green technology premiums, Carbon footprint calculations, Renewable energy integrations",
+      calculate: this.calculateFIDICGreenBook.bind(this)
+    },
+    nhaiHAM: {
+      name: "NHAI HAM Methodology",
+      description: "Hybrid Annuity Model calculations, Government payment structures, Traffic revenue projections, Concession period adjustments, Performance-based payments",
+      calculate: this.calculateNHAIHAM.bind(this)
+    }
+  };
+  
   constructor() {
     this.initializeAIClients();
   }
@@ -904,22 +1008,241 @@ ${documentSummaries}`;
     }
     this.emitProgress("enhancement_analysis", 80, "Identifying NEW additional claims and opportunities", 7, 8);
     await this.delay(800);
+    
+    // Enhanced new additional claims with sector-specific enhancements
     const newAdditionalClaims = [];
+    
+    // Determine project type from documents
+    let projectType = "general";
+    if (documents2.some(doc => doc.filename.toLowerCase().includes("highway") || 
+                            doc.filename.toLowerCase().includes("road") ||
+                            doc.content.toLowerCase().includes("nhai"))) {
+      projectType = "highway";
+    } else if (documents2.some(doc => doc.filename.toLowerCase().includes("bridge") || 
+                                 doc.content.toLowerCase().includes("bridge"))) {
+      projectType = "bridge";
+    } else if (documents2.some(doc => doc.filename.toLowerCase().includes("metro") || 
+                                 doc.filename.toLowerCase().includes("rail") ||
+                                 doc.content.toLowerCase().includes("underground"))) {
+      projectType = "metro";
+    } else if (documents2.some(doc => doc.filename.toLowerCase().includes("power") || 
+                                 doc.filename.toLowerCase().includes("plant") ||
+                                 doc.content.toLowerCase().includes("thermal"))) {
+      projectType = "power";
+    } else if (documents2.some(doc => doc.filename.toLowerCase().includes("airport") || 
+                                 doc.filename.toLowerCase().includes("terminal") ||
+                                 doc.content.toLowerCase().includes("aviation"))) {
+      projectType = "airport";
+    } else if (documents2.some(doc => doc.filename.toLowerCase().includes("tunnel") || 
+                                 doc.content.toLowerCase().includes("tunnel"))) {
+      projectType = "tunnel";
+    } else if (documents2.some(doc => doc.filename.toLowerCase().includes("water") || 
+                                 doc.filename.toLowerCase().includes("treatment") ||
+                                 doc.content.toLowerCase().includes("water treatment"))) {
+      projectType = "water";
+    } else if (documents2.some(doc => doc.filename.toLowerCase().includes("port") || 
+                                 doc.content.toLowerCase().includes("port"))) {
+      projectType = "port";
+    } else if (documents2.some(doc => doc.filename.toLowerCase().includes("smart") || 
+                                 doc.filename.toLowerCase().includes("city") ||
+                                 doc.content.toLowerCase().includes("smart city"))) {
+      projectType = "smartcity";
+    }
+    
+    // Apply sector-specific enhancements
+    switch (projectType) {
+      case "highway":
+        newAdditionalClaims.push({ 
+          id: `new-land-acquisition-${Date.now()}`, 
+          category: "Land Acquisition Risk Premium", 
+          description: "NEW CLAIM: Land acquisition delays and associated costs - Separate quantified claim for land acquisition complexities and delays", 
+          amount: 20e9, 
+          status: "new", 
+          annexure: "Land Acquisition Risk Analysis", 
+          evidence: ["Land acquisition records", "Delay documentation", "Cost escalation reports", "Government correspondence"], 
+          legalBasis: "NHAI Contract Conditions - Land Acquisition + FIDIC Sub-Clause 8.4 - Extension of Time" 
+        });
+        
+        newAdditionalClaims.push({ 
+          id: `new-environmental-${Date.now()}`, 
+          category: "Environmental Compliance Costs", 
+          description: "NEW CLAIM: Additional environmental compliance costs - Separate quantified claim for enhanced environmental requirements", 
+          amount: 15e9, 
+          status: "new", 
+          annexure: "Environmental Compliance Analysis", 
+          evidence: ["Environmental clearance documents", "Compliance cost records", "Regulatory correspondence"], 
+          legalBasis: "Environmental Laws + Contract Environmental Provisions" 
+        });
+        break;
+        
+      case "bridge":
+        newAdditionalClaims.push({ 
+          id: `new-technical-complexity-${Date.now()}`, 
+          category: "Technical Complexity Premium", 
+          description: "NEW CLAIM: Additional costs for technical complexity - Separate quantified claim for specialized bridge construction challenges", 
+          amount: 18e9, 
+          status: "new", 
+          annexure: "Technical Complexity Assessment", 
+          evidence: ["Design documents", "Specialized equipment records", "Expert consultations"], 
+          legalBasis: "Contract Special Conditions + FIDIC Sub-Clause 13.3 - Variations" 
+        });
+        break;
+        
+      case "metro":
+        newAdditionalClaims.push({ 
+          id: `new-underground-conflicts-${Date.now()}`, 
+          category: "Underground Utility Conflicts", 
+          description: "NEW CLAIM: Costs for underground utility conflicts - Separate quantified claim for complex utility relocations", 
+          amount: 22e9, 
+          status: "new", 
+          annexure: "Underground Utility Conflict Analysis", 
+          evidence: ["Utility maps", "Relocation records", "Cost documentation"], 
+          legalBasis: "FIDIC Sub-Clause 8.4 - Extension of Time + Utility Coordination Provisions" 
+        });
+        
+        newAdditionalClaims.push({ 
+          id: `new-traffic-management-${Date.now()}`, 
+          category: "Traffic Management Premium", 
+          description: "NEW CLAIM: 24/7 traffic management costs - Separate quantified claim for continuous traffic coordination", 
+          amount: 12e9, 
+          status: "new", 
+          annexure: "Traffic Management Cost Analysis", 
+          evidence: ["Traffic management plans", "Coordination records", "Cost logs"], 
+          legalBasis: "Traffic Management Regulations + Contract Coordination Requirements" 
+        });
+        break;
+        
+      case "power":
+        newAdditionalClaims.push({ 
+          id: `new-environmental-compliance-${Date.now()}`, 
+          category: "Power Sector Environmental Compliance", 
+          description: "NEW CLAIM: Ultra-supercritical technology compliance costs - Separate quantified claim for advanced environmental requirements", 
+          amount: 30e9, 
+          status: "new", 
+          annexure: "Power Sector Environmental Compliance Analysis", 
+          evidence: ["Environmental compliance records", "Technology documentation", "Cost analysis"], 
+          legalBasis: "Environmental Regulations + Power Sector Standards" 
+        });
+        
+        newAdditionalClaims.push({ 
+          id: `new-grid-synchronization-${Date.now()}`, 
+          category: "Grid Synchronization Delays", 
+          description: "NEW CLAIM: Transmission infrastructure delays - Separate quantified claim for grid connection delays", 
+          amount: 25e9, 
+          status: "new", 
+          annexure: "Grid Synchronization Delay Analysis", 
+          evidence: ["Transmission records", "Delay documentation", "Cost impact analysis"], 
+          legalBasis: "Grid Connection Agreements + FIDIC Sub-Clause 8.4" 
+        });
+        break;
+        
+      case "airport":
+        newAdditionalClaims.push({ 
+          id: `new-aviation-compliance-${Date.now()}`, 
+          category: "Aviation Authority Compliance", 
+          description: "NEW CLAIM: DGCA, AAI, ICAO certification costs - Separate quantified claim for aviation regulatory compliance", 
+          amount: 18e9, 
+          status: "new", 
+          annexure: "Aviation Compliance Cost Analysis", 
+          evidence: ["Certification records", "Compliance costs", "Regulatory correspondence"], 
+          legalBasis: "Aviation Regulations + Contract Compliance Requirements" 
+        });
+        break;
+    }
+    
+    // General enhancements (existing)
     if (allClaims.length > 0) {
-      newAdditionalClaims.push({ id: `new-interest-${Date.now()}`, category: "Interest on Delayed Payments", description: "NEW CLAIM: Interest on delayed payments and outstanding dues - Separate quantified claim for financial losses due to payment delays", amount: 15e9, status: "new", annexure: "Financial Analysis: Interest Calculation", evidence: ["Payment delay records", "Interest rate documentation", "Outstanding amount ledger", "Bank statements"], legalBasis: "Contract Clause on Interest & Financial Compensation + Banking regulations" });
+      newAdditionalClaims.push({ 
+        id: `new-interest-${Date.now()}`, 
+        category: "Interest on Delayed Payments", 
+        description: "NEW CLAIM: Interest on delayed payments and outstanding dues - Separate quantified claim for financial losses due to payment delays", 
+        amount: 15e9, 
+        status: "new", 
+        annexure: "Financial Analysis: Interest Calculation", 
+        evidence: ["Payment delay records", "Interest rate documentation", "Outstanding amount ledger", "Bank statements"], 
+        legalBasis: "Contract Clause on Interest & Financial Compensation + Banking regulations" 
+      });
     }
+    
     if (allClaims.some((c) => c.category.includes("Prolongation"))) {
-      newAdditionalClaims.push({ id: `new-opportunity-${Date.now()}`, category: "Loss of Opportunity", description: "NEW CLAIM: Loss of business opportunities due to project delays - Quantified opportunity cost for alternative projects foregone", amount: 25e9, status: "new", annexure: "Business Impact Analysis: Opportunity Loss", evidence: ["Alternative project proposals", "Market analysis", "Revenue projections", "Competitive landscape assessment"], legalBasis: "Commercial law precedents for opportunity cost + Contract provisions for consequential damages" });
+      newAdditionalClaims.push({ 
+        id: `new-opportunity-${Date.now()}`, 
+        category: "Loss of Opportunity", 
+        description: "NEW CLAIM: Loss of business opportunities due to project delays - Quantified opportunity cost for alternative projects foregone", 
+        amount: 25e9, 
+        status: "new", 
+        annexure: "Business Impact Analysis: Opportunity Loss", 
+        evidence: ["Alternative project proposals", "Market analysis", "Revenue projections", "Competitive landscape assessment"], 
+        legalBasis: "Commercial law precedents for opportunity cost + Contract provisions for consequential damages" 
+      });
     }
+    
     if (allClaims.length > 2) {
-      newAdditionalClaims.push({ id: `new-professional-${Date.now()}`, category: "Professional & Legal Fees", description: "NEW CLAIM: Additional professional, legal, and consulting fees incurred - Separate quantified costs for claim preparation and legal support", amount: 5e9, status: "new", annexure: "Professional Services Documentation", evidence: ["Legal fee invoices", "Consultant agreements", "Expert witness costs", "Documentation expenses"], legalBasis: "Contract provisions for recovery of legal costs + Professional services agreements" });
+      newAdditionalClaims.push({ 
+        id: `new-professional-${Date.now()}`, 
+        category: "Professional & Legal Fees", 
+        description: "NEW CLAIM: Additional professional, legal, and consulting fees incurred - Separate quantified costs for claim preparation and legal support", 
+        amount: 5e9, 
+        status: "new", 
+        annexure: "Professional Services Documentation", 
+        evidence: ["Legal fee invoices", "Consultant agreements", "Expert witness costs", "Documentation expenses"], 
+        legalBasis: "Contract provisions for recovery of legal costs + Professional services agreements" 
+      });
     }
+    
     if (allClaims.some((c) => c.category.includes("Equipment") || c.category.includes("Plant"))) {
-      newAdditionalClaims.push({ id: `new-standby-${Date.now()}`, category: "Equipment Standby Costs", description: "NEW CLAIM: Equipment standby and maintenance costs during delays - Separate quantified expenses for equipment retention", amount: 12e9, status: "new", annexure: "Equipment Cost Analysis", evidence: ["Equipment rental agreements", "Maintenance cost records", "Standby time logs", "Equipment deployment schedules"], legalBasis: "Equipment lease provisions + Contract clauses for standby costs" });
+      newAdditionalClaims.push({ 
+        id: `new-standby-${Date.now()}`, 
+        category: "Equipment Standby Costs", 
+        description: "NEW CLAIM: Equipment standby and maintenance costs during delays - Separate quantified expenses for equipment retention", 
+        amount: 12e9, 
+        status: "new", 
+        annexure: "Equipment Cost Analysis", 
+        evidence: ["Equipment rental agreements", "Maintenance cost records", "Standby time logs", "Equipment deployment schedules"], 
+        legalBasis: "Equipment lease provisions + Contract clauses for standby costs" 
+      });
     }
+    
     const enhancedClaims = [...allClaims, ...newAdditionalClaims];
     const enhancedTotalValue = enhancedClaims.reduce((s, c) => s + c.amount, 0);
     const newClaimsValue = newAdditionalClaims.reduce((s, c) => s + c.amount, 0);
+    this.emitProgress("financial_analysis", 90, "Performing advanced financial calculations using multiple methodologies", 7, 8);
+    await this.delay(800);
+    
+    // Apply financial calculation methodologies
+    const financialResults = [];
+    for (const claim of enhancedClaims) {
+      // Apply all three methodologies to each claim
+      const fidicTraditionalResult = this.calculateFIDICTraditional({
+        amount: claim.amount,
+        delayMonths: 12, // Default values for demonstration
+        plantEquipment: claim.amount * 0.3,
+        labor: claim.amount * 0.4,
+        materials: claim.amount * 0.3,
+        siteOverheads: claim.amount * 0.1,
+        headOfficeOverheads: claim.amount * 0.05,
+        originalDuration: 36
+      });
+      
+      const fidicGreenBookResult = this.calculateFIDICGreenBook({
+        amount: claim.amount
+      });
+      
+      const nhaiHAMResult = this.calculateNHAIHAM({
+        amount: claim.amount,
+        discountRate: 0.12,
+        concessionPeriod: 20
+      });
+      
+      financialResults.push({
+        claimId: claim.id,
+        claimCategory: claim.category,
+        fidicTraditional: fidicTraditionalResult,
+        fidicGreenBook: fidicGreenBookResult,
+        nhaiHAM: nhaiHAMResult
+      });
+    }
+    
     this.emitProgress("final_validation", 95, "Performing final validation and quality checks", 8, 8);
     await this.delay(600);
     this.emitProgress("analysis_complete", 100, `Analysis completed: ${allClaims.length} original claims (\u20B9${(grandTotal / 1e7).toFixed(1)} Cr) + ${newAdditionalClaims.length} NEW claims (\u20B9${(newClaimsValue / 1e7).toFixed(1)} Cr) = Total \u20B9${(enhancedTotalValue / 1e7).toFixed(1)} Cr`, 8, 8);
@@ -932,11 +1255,14 @@ ${documentSummaries}`;
       totalEnhancedValue: enhancedTotalValue,
       newAdditionalClaims,
       newClaimsValue,
+      projectType,
+      financialResults,
       enhancementSummary: {
         originalAmount: grandTotal,
         newClaimsAmount: newClaimsValue,
         totalWithNewClaims: enhancedTotalValue,
-        additionalValueIdentified: newClaimsValue
+        additionalValueIdentified: newClaimsValue,
+        enhancementPercentage: ((enhancedTotalValue - grandTotal) / grandTotal * 100).toFixed(1)
       }
     };
   }
@@ -1372,21 +1698,17 @@ import compression from "compression";
 import { LRUCache as LRUCache3 } from "lru-cache";
 var app = express2();
 var cache = new LRUCache3({
-  max: process.env.NODE_ENV === "production" ? 500 : 1e3,
-  // Reduced for production
-  ttl: 1e3 * 60 * 30,
-  // 30 minutes
-  allowStale: false,
-  updateAgeOnGet: false,
+  max: process.env.NODE_ENV === "production" ? 1000 : 2000, // Increased cache capacity
+  ttl: 1e3 * 60 * 60, // Increased to 1 hour
+  allowStale: true, // Allow stale data during updates
+  updateAgeOnGet: true, // Reset TTL on access
   dispose: (value, key) => {
     console.log(`\u{1F9F9} Server cache entry disposed: ${key}`);
   }
 });
 app.use(compression({
-  level: 6,
-  // Balanced compression
-  threshold: 1024,
-  // Increased threshold
+  level: 9, // Maximum compression
+  threshold: 512, // Reduced threshold for earlier compression
   filter: (req, res) => {
     if (req.headers["x-no-compression"]) {
       return false;
@@ -1395,19 +1717,16 @@ app.use(compression({
   }
 }));
 app.use(express2.json({
-  limit: "50mb",
-  // Reduced from 100mb
+  limit: "100mb", // Increased from 50mb
   type: ["application/json", "text/plain"]
 }));
 app.use(express2.urlencoded({
   extended: true,
-  limit: "50mb",
-  // Reduced from 100mb
-  parameterLimit: 1e3
-  // Reduced from 5000
+  limit: "100mb", // Increased from 50mb
+  parameterLimit: 5000 // Increased from 1000
 }));
 var requestCounts = /* @__PURE__ */ new Map();
-var RATE_LIMIT = process.env.NODE_ENV === "production" ? 100 : 200;
+var RATE_LIMIT = process.env.NODE_ENV === "production" ? 200 : 500; // Increased rate limits
 var RATE_WINDOW = 60 * 1e3;
 app.use((req, res, next) => {
   const clientIP = req.ip || req.connection.remoteAddress || "unknown";
@@ -1434,6 +1753,9 @@ app.use((req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Frame-Options", "DENY");
     res.setHeader("X-XSS-Protection", "1; mode=block");
+    // Add additional security headers
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data: https:;");
   }
   next();
 });
@@ -1448,6 +1770,7 @@ app.use((req, res, next) => {
   }
   next();
 });
+// Add request logging with performance metrics
 app.use((req, res, next) => {
   const start = Date.now();
   const path5 = req.path;
@@ -1464,10 +1787,15 @@ app.use((req, res, next) => {
       if (capturedJsonResponse) {
         logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
       }
-      if (logLine.length > 80) {
-        logLine = logLine.slice(0, 79) + "\u2026";
+      if (logLine.length > 200) { // Increased log line length
+        logLine = logLine.slice(0, 199) + "\u2026";
       }
       log(logLine);
+      
+      // Performance monitoring
+      if (duration > 5000) { // Log slow requests
+        console.warn(`[PERFORMANCE] Slow request detected: ${req.method} ${path5} took ${duration}ms`);
+      }
     }
   });
   next();
