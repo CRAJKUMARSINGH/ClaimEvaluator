@@ -25,6 +25,7 @@
     "start:win": "cmd /c \"set NODE_ENV=production && node dist/index.js\"",
     "start:one-click": "npm install && npm run build && npm start",
     "check": "tsc",
+    "check:deploy": "node deploy-check.js",
     "db:push": "drizzle-kit push",
     "test": "node tests/functional-test.js",
     "test:enhanced": "node tests/enhanced-tests.js",
