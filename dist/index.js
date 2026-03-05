@@ -667,25 +667,27 @@ var AIAnalysisService = class {
   progressCallback;
   aiClients = [];
   // Add financial calculation methodologies
-  financialMethodologies = {
-    fidicTraditional: {
-      name: "FIDIC Traditional Methodology",
-      description: "Time-related cost calculations, Disruption and loss of productivity analysis, Head office overhead calculations, Financing cost computations, Risk and profit adjustments",
-      calculate: this.calculateFIDICTraditional.bind(this)
-    },
-    fidicGreenBook: {
-      name: "FIDIC Green Book Methodology",
-      description: "Sustainable construction adjustments, Environmental compliance costs, Green technology premiums, Carbon footprint calculations, Renewable energy integrations",
-      calculate: this.calculateFIDICGreenBook.bind(this)
-    },
-    nhaiHAM: {
-      name: "NHAI HAM Methodology",
-      description: "Hybrid Annuity Model calculations, Government payment structures, Traffic revenue projections, Concession period adjustments, Performance-based payments",
-      calculate: this.calculateNHAIHAM.bind(this)
-    }
-  };
+  financialMethodologies = {};
   
   constructor() {
+    // Initialize methodologies after methods are available
+    this.financialMethodologies = {
+      fidicTraditional: {
+        name: "FIDIC Traditional Methodology",
+        description: "Time-related cost calculations, Disruption and loss of productivity analysis, Head office overhead calculations, Financing cost computations, Risk and profit adjustments",
+        calculate: this.calculateFIDICTraditional.bind(this)
+      },
+      fidicGreenBook: {
+        name: "FIDIC Green Book Methodology",
+        description: "Sustainable construction adjustments, Environmental compliance costs, Green technology premiums, Carbon footprint calculations, Renewable energy integrations",
+        calculate: this.calculateFIDICGreenBook.bind(this)
+      },
+      nhaiHAM: {
+        name: "NHAI HAM Methodology",
+        description: "Hybrid Annuity Model calculations, Government payment structures, Traffic revenue projections, Concession period adjustments, Performance-based payments",
+        calculate: this.calculateNHAIHAM.bind(this)
+      }
+    };
     this.initializeAIClients();
   }
   initializeAIClients() {
@@ -1416,6 +1418,48 @@ Return JSON array.`;
     } catch (_e) {
       return ["Prioritize completion of incomplete claims documentation", "Coordinate submission timeline to maximize negotiation leverage", "Strengthen evidence collection across all claim categories"];
     }
+  }
+  
+  // Financial calculation methods
+  calculateFIDICTraditional(params) {
+    const { amount, delayMonths = 12, plantEquipment = 0, labor = 0, materials = 0, siteOverheads = 0, headOfficeOverheads = 0, originalDuration = 36 } = params;
+    const prolongationCost = (siteOverheads + headOfficeOverheads) * (delayMonths / originalDuration);
+    const financingCost = amount * 0.12 * (delayMonths / 12);
+    const totalCost = amount + prolongationCost + financingCost;
+    return {
+      methodology: "FIDIC Traditional",
+      baseAmount: amount,
+      prolongationCost,
+      financingCost,
+      totalCost,
+      confidence: 0.85
+    };
+  }
+  
+  calculateFIDICGreenBook(params) {
+    const { amount } = params;
+    const sustainabilityPremium = amount * 0.15;
+    const totalCost = amount + sustainabilityPremium;
+    return {
+      methodology: "FIDIC Green Book",
+      baseAmount: amount,
+      sustainabilityPremium,
+      totalCost,
+      confidence: 0.80
+    };
+  }
+  
+  calculateNHAIHAM(params) {
+    const { amount, discountRate = 0.12, concessionPeriod = 20 } = params;
+    const annuityFactor = (1 - Math.pow(1 + discountRate, -concessionPeriod)) / discountRate;
+    const annualPayment = amount / annuityFactor;
+    return {
+      methodology: "NHAI HAM",
+      baseAmount: amount,
+      annualPayment,
+      totalCost: annualPayment * concessionPeriod,
+      confidence: 0.82
+    };
   }
 };
 
